@@ -1,0 +1,15 @@
+{
+  "name": "broken-game-shooter-lab",
+  "version": "1.0.0",
+  "description": "Deliberately vulnerable top-down shooter teaching lab: Replay -> Stored XSS -> SQL Injection -> weak MD5 cracking (OWASP A04/A03/A03 + A02). Localhost only.",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "jsdom": "^24.1.0",
+    "sql.js": "^1.12.0"
+  }
+}

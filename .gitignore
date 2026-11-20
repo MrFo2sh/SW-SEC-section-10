@@ -1,0 +1,13 @@
+# dependencies
+node_modules/
+
+# the agent's factory — build-time only, never shipped to students
+AGENTS.md
+agents.md
+CLAUDE.md
+.notes/
+*.scratch.md
+
+# runtime / os
+*.log
+.DS_Store
