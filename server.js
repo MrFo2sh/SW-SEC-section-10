@@ -25,7 +25,7 @@ const PORT = process.env.PORT || 3003;
 // Localhost by default. For a classroom where students attack from a VM/LAN,
 // opt in explicitly: HOST=0.0.0.0 node server.js  (exposes this DELIBERATELY
 // VULNERABLE app to the network — only do this on a trusted teaching network).
-const HOST = process.env.HOST || '127.0.0.1';
+const HOST = process.env.HOST || '0.0.0.0';
 
 const app = express();
 app.use(express.json());
