@@ -22,7 +22,10 @@ const { JSDOM, VirtualConsole } = require('jsdom');
 const { FLAGS, md5, seedPlayers, buildSqlDb } = require('./db');
 
 const PORT = process.env.PORT || 3003;
-const HOST = '127.0.0.1'; // localhost only — never bind beyond this machine.
+// Localhost by default. For a classroom where students attack from a VM/LAN,
+// opt in explicitly: HOST=0.0.0.0 node server.js  (exposes this DELIBERATELY
+// VULNERABLE app to the network — only do this on a trusted teaching network).
+const HOST = process.env.HOST || '127.0.0.1';
 
 const app = express();
 app.use(express.json());
@@ -95,6 +98,10 @@ app.get('/',         (req, res) => res.type('html').send(PAGE_LANDING));
 app.get('/login',    (req, res) => res.type('html').send(PAGE_LOGIN));
 app.get('/register', (req, res) => res.type('html').send(PAGE_REGISTER));
 app.get('/game',     (req, res) => res.type('html').send(PAGE_GAME));
+// Unlinked: not reachable from the normal UI, found by directory fuzzing. The
+// page loads for anyone (200), but its data (/api/admin/members) is admin-only,
+// so it is useless until you hold the stolen GameMaster session.
+app.get('/admin',    (req, res) => res.type('html').send(PAGE_ADMIN));
 
 // ========================================================================
 // POST /api/register { username, password, displayName? } -> { token }
@@ -306,12 +313,20 @@ function pushAnnouncement(name, text) {
 }
 
 // ========================================================================
-// GET /api/players/search?q= (auth) — find other players by name.
-//   Reachable by any logged-in player (it is a normal game feature).
+// GET /api/admin/members?q=  (auth, ADMIN only) — the GameMaster's member list.
+//   Reachable ONLY with an admin session, i.e. the GameMaster token you steal
+//   via the stage-2 XSS. This is the whole chain: XSS -> admin token -> /admin
+//   -> SQL injection here -> dump the MD5 hashes.
 // ========================================================================
-app.get('/api/players/search', (req, res) => {
+app.get('/api/admin/members', (req, res) => {
   const p = requireAuth(req, res);
   if (!p) return;
+  // VULN(stage-2/3, OWASP A01): admin-only data gated by role alone — whoever
+  // holds an admin session reaches it. You get here by stealing the GameMaster
+  // session with XSS, not by being a real admin.
+  // FIX: that is by design here; the real lesson is upstream (do not let the
+  //      session be stealable: HttpOnly cookie + output encoding).
+  if (p.role !== 'admin') return res.status(403).json({ error: 'admin only' });
   const q = typeof req.query.q === 'string' ? req.query.q : '';
 
   // VULN(stage-3, OWASP A03): q is concatenated straight into the SQL string in
@@ -553,6 +568,41 @@ const PAGE_REGISTER = doc(
   ".then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j};});})" +
   ".then(function(x){if(x.ok&&x.j.token){localStorage.setItem('ma_token',x.j.token);location.href='/game';return;}e.textContent=(x.j&&x.j.error)||'Could not register.';})" +
   ".catch(function(){e.textContent='Something went wrong.';});});"
+);
+
+// The GameMaster-only members console. Unlinked from the normal UI (found by
+// fuzzing). Loads the roster from /api/admin/members, which is admin-gated — so
+// a normal player sees "access denied" and only the stolen GameMaster session
+// unlocks the table and its search box (the SQL-injection entry point).
+const PAGE_ADMIN = doc(
+  '<div class="center"><div class="panel" style="width:min(96vw,760px)">' +
+    '<div class="brand" style="margin-bottom:6px">GAMEMASTER CONSOLE</div>' +
+    '<p class="muted" id="whoami" style="font-size:13px;margin:0 0 14px"></p>' +
+    '<div id="gate"></div>' +
+    '<div id="panel" style="display:none">' +
+      '<form id="sf" autocomplete="off" style="display:flex;gap:10px;align-items:flex-end;margin-bottom:14px">' +
+        '<div style="flex:1"><label>Find a member</label><input name="q" placeholder="name or username"></div>' +
+        '<button type="submit" style="margin:0">Search</button>' +
+      '</form>' +
+      '<table style="width:100%;border-collapse:collapse;font-size:14px"><thead><tr>' +
+        '<th style="text-align:left;border-bottom:2px solid var(--border);padding:6px">ID</th>' +
+        '<th style="text-align:left;border-bottom:2px solid var(--border);padding:6px">Username</th>' +
+        '<th style="text-align:left;border-bottom:2px solid var(--border);padding:6px">Name</th>' +
+        '<th style="text-align:left;border-bottom:2px solid var(--border);padding:6px">Score</th>' +
+      '</tr></thead><tbody id="rows"></tbody></table>' +
+    '</div>' +
+  '</div></div>',
+  "var me=null;" +
+  "function load(q){var u='/api/admin/members'+(q?('?q='+encodeURIComponent(q)):'');" +
+  "api(u).then(function(r){return r.json().then(function(j){return {s:r.status,j:j};});}).then(function(x){" +
+  "if(x.s===403||x.s===401){document.getElementById('gate').innerHTML='<p class=\"err\">Access denied. GameMaster session required.</p>';document.getElementById('panel').style.display='none';return;}" +
+  "document.getElementById('gate').innerHTML='';document.getElementById('panel').style.display='block';" +
+  "var rows=(x.j.results||[]).map(function(m){return '<tr><td style=\"padding:6px\">'+esc(m.id)+'</td><td style=\"padding:6px\">'+esc(m.username)+'</td><td style=\"padding:6px\">'+esc(m.display_name)+'</td><td style=\"padding:6px\">'+esc(m.score)+'</td></tr>';}).join('');" +
+  "document.getElementById('rows').innerHTML=rows||'<tr><td colspan=4 style=\"padding:6px\" class=\"muted\">no results</td></tr>';" +
+  "});}" +
+  "api('/api/me').then(function(r){return r.ok?r.json():null;}).then(function(m){me=m;" +
+  "document.getElementById('whoami').textContent=m?('signed in as @'+m.username+'  ('+m.role+')'):'not signed in';load('');});" +
+  "var sf=document.getElementById('sf');if(sf){sf.addEventListener('submit',function(e){e.preventDefault();load(sf.q.value);});}"
 );
 
 // The game page: canvas arena on the left, HUD + leaderboard + chat on the
